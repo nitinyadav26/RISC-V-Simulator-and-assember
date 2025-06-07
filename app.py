@@ -147,6 +147,32 @@ def decode_machine_code(machine_code):
                     imm = imm - 4096
                 return f"{instr} {REGISTER_MAP[rd]},{REGISTER_MAP[rs1]},{imm}"
 
+        # B-type instruction (branches)
+        elif opcode == "1100011":
+            # B-type immediate: imm[12|10:5|4:1|11] = bits [0|1:7|20:24|24]
+            imm12 = machine_code[0]
+            imm10_5 = machine_code[1:7]
+            rs2 = machine_code[7:12]
+            rs1 = machine_code[12:17]
+            funct3 = machine_code[17:20]
+            imm4_1 = machine_code[20:24]
+            imm11 = machine_code[24]
+            # Immediate is sign-extended
+            imm = int(imm12 + imm11 + imm10_5 + imm4_1 + "0", 2)
+            if imm12 == "1":
+                imm -= (1 << 13)
+            branch_map = {
+                "000": "beq",
+                "001": "bne",
+                "100": "blt",
+                "101": "bge",
+                "110": "bltu",
+                "111": "bgeu"
+            }
+            if funct3 in branch_map:
+                instr = branch_map[funct3]
+                return f"{instr} {REGISTER_MAP[rs1]},{REGISTER_MAP[rs2]},{imm}"
+
         return None
     except Exception:
         return None
@@ -165,21 +191,24 @@ def assemble():
         if not assembly_code:
             return jsonify({'error': 'No assembly code provided'}), 400
 
-        # Check if input might be machine code
-        if all(c in '01 b' for c in assembly_code):
-            # Try to decode machine code
-            decoded = decode_machine_code(assembly_code)
-            if decoded:
+        # Check if input might be machine code (support multiple lines)
+        if all(c in '01 b\n' for c in assembly_code):
+            lines = [line.strip().replace("0b", "").replace(" ", "") for line in assembly_code.splitlines() if line.strip()]
+            decoded_lines = [dl for line in lines if len(line) == 32 for dl in [decode_machine_code(line)] if dl is not None]
+            print(f"[DEBUG] Decoded lines: {decoded_lines}")  # Debug print
+            if decoded_lines:
                 return jsonify({
                     'machine_code': assembly_code,
-                    'assembly_code': decoded,
+                    'assembly_code': "\n".join(decoded_lines),
                     'message': 'Successfully translated machine code to assembly'
                 })
-            
+            else:
+                return jsonify({'error': 'No valid 32-bit machine code lines found.'}), 400
+        
         # Ensure code ends with a halt instruction
         if 'beq zero,zero,0' not in assembly_code:
             assembly_code += '\nbeq zero,zero,0'
-            
+        
         # Create temporary directory to work in
         temp_dir = tempfile.mkdtemp()
         try:
